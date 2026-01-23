@@ -1,4 +1,20 @@
 ================================================================================
+✅ COMPLETE - DECEMBER 2025
+================================================================================
+
+This plan has been fully implemented and is now complete. All features described
+below have been successfully integrated into the codebase.
+
+Completion Summary:
+- ✅ Per-text-block transitions for colour schemes, modes, and effects
+- ✅ Random and sequential cycling modes for all effect types
+- ✅ Min/max range controls for ghost, flicker, and speed parameters
+- ✅ GUI controls in TransitionsTab with collapsible sections
+- ✅ Full integration with transition_manager.py
+
+See REFACTORING_PROGRESS.md for implementation details.
+
+================================================================================
 PLAN: ADD PER-TEXT-BLOCK VISUAL EFFECT TRANSITIONS
 ================================================================================
 

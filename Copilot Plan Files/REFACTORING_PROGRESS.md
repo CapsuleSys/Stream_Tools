@@ -2,8 +2,8 @@
 
 **Project**: Text Display Screen  
 **Started**: December 7, 2025  
-**Status**: Planning Phase  
-**Target Completion**: TBD
+**Status**: Phase 1 & 2 Complete - January 23, 2026  
+**Target Completion**: Phase 3 TBD
 
 ---
 
@@ -176,6 +176,82 @@ Comprehensive refactoring to address:
 
 ---
 
+### 1.5 Replace print() with Logging (2-3 hours) ✅
+**Status**: ✅ **COMPLETE** (January 23, 2026)
+
+- [x] Create `logger_setup.py` infrastructure
+- [x] Replace all `print()` with `logging` module in production files
+- [x] Create logger instances in each module
+- [x] Configure logging format and levels
+- [x] Add log file output option
+
+**Files Migrated** (8/8 production files):
+1. ✅ `launcher.py` - Main application entry point
+2. ✅ `screendisplayer.py` - Core display engine
+3. ✅ `transition_manager.py` - Transition orchestration
+4. ✅ `settings_gui.py` - Settings GUI coordinator
+5. ✅ `chat_tools.py` - Chat integration coordinator
+6. ✅ `chat_tools_settings.py` - Chat settings GUI (17 print→logger calls, Jan 23)
+7. ✅ All tab modules in `settings_gui_tabs/`
+8. ✅ All modules in `chat_tools_modules/`
+
+**Files Excluded** (intentionally kept print() for user-facing output):
+- `example_usage.py` - Demo file with user-facing console output
+- `test_enum_cycling.py` - Test file
+- Utility scripts in `config/` (one-off tools)
+
+**Impact**: Production-ready logging infrastructure, better debugging, log file tracking
+
+**Phase 1.5 Status: COMPLETE** ✅ (January 23, 2026)
+
+---
+
+## ✅ COMPLETED BONUS FEATURES (Not Originally Planned)
+
+### Chat Commands & Auto Messages System
+**Status**: ✅ **COMPLETE** (December 2025)
+
+**Implemented Features**:
+- Custom chat commands with aliases, permissions, cooldowns
+- Auto-message system with interval timing and activity tracking
+- Tabbed settings GUI (ConnectionTab, CommandsTab, AutoMessagesTab)
+- Command handler with permission levels (streamer/mods/everyone)
+- Auto-message handler with random/sequential modes
+- Full config save/load with validation
+- Live config reloading via file watcher
+
+**Files Created**:
+- `chat_tools_modules/command_handler.py` (~150 lines)
+- `chat_tools_modules/auto_message_handler.py` (~180 lines)
+- `chat_tools_settings_tabs/commands_tab.py` (~240 lines)
+- `chat_tools_settings_tabs/auto_messages_tab.py` (~320 lines)
+
+**Impact**: Full Twitch bot functionality with moderation and automation
+
+---
+
+### Per-Text-Block Effect Transitions
+**Status**: ✅ **COMPLETE** (December 2025)
+
+**Implemented Features**:
+- Colour scheme transitions (random/sequential through all 23 schemes)
+- Transition mode cycling (smooth, snap, mixed, spread_horizontal, spread_vertical)
+- Ghost parameter randomisation (chance/decay within min/max ranges)
+- Flicker parameter randomisation (chance/intensity within ranges)
+- Speed variation (random speeds within configurable bounds)
+- GUI controls in TransitionsTab with collapsible sections
+- Advanced tab with min/max range sliders
+
+**Technical Implementation**:
+- Extended `TransitionSettings` dataclass with 20+ new fields
+- `_apply_effect_transitions()` method in `transition_manager.py`
+- Enum ordering system (random/sequential) for colour schemes and modes
+- Hot-reload support for mid-stream setting changes
+
+**Impact**: Dynamic visual variety, automated effect cycling, enhanced stream aesthetics
+
+---
+
 ### 1.5 Standardise Error Handling (2-3 hours)
 - [ ] Replace all `print()` with `logging` module
 - [ ] Create logger instances in each module
@@ -190,14 +266,22 @@ Comprehensive refactoring to address:
 
 ## Phase 2: Split God Classes (2-3 weeks)
 
-**Status**: ✅ **4/4 COMPLETE** - ALL GOD CLASSES SPLIT! 🎉
+**Status**: ✅ **COMPLETE** (December 8, 2025 - January 2026) 🎉
+- ✅ Phase 2.1: Split `chat_tools_settings.py` COMPLETE (1640 → 958 lines, 42% reduction!)
+- ✅ Phase 2.2: Split `settings_gui.py` COMPLETE (1217 → 530 lines, 56% reduction!)
 - ✅ Phase 2.3: Split `config/settings.py` COMPLETE (670 lines → 4 clean files!)
-- ✅ Phase 2.4: Create GUI utilities package COMPLETE (Shared foundation ready!)
-- ✅ Phase 2.2: Split `settings_gui.py` god class **COMPLETE** ✅ (1217 → 530 lines, 56% reduction!)
-- ✅ Phase 2.1: Split `chat_tools_settings.py` god class **COMPLETE** ✅ (1640 → 958 lines, 42% reduction!)
-- ✅ Phase 2.5: Split `chat_tools.py` god class **COMPLETE** ✅ (875 → 530 lines, 39% reduction!)
+- ✅ Phase 2.4: Create GUI utilities package COMPLETE (shared foundation ready!)
+- ✅ Phase 2.5: Split `chat_tools.py` COMPLETE (875 → 530 lines, 39% reduction!)
 
-**Overall Status**: ✅ **PHASE 2 COMPLETE!** All 4 god classes successfully refactored!
+**Overall Impact**: 
+- 5 major god classes refactored
+- ~750+ lines of code eliminated through modularization
+- Dramatically improved maintainability and testability
+- Established reusable patterns for future development
+
+**Overall Status**: ✅ **PHASE 2 COMPLETE!** All 5 god classes successfully refactored!
+
+---
 
 ### 2.1 Split `chat_tools_settings.py` (1640 lines → 958 lines) ✅
 

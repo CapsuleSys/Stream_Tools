@@ -15,6 +15,9 @@ import threading
 import webbrowser
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from logger_setup import setup_logger
+
+logger = setup_logger(__name__)
 
 # Import tab classes
 from chat_tools_settings_tabs import ConnectionTab, CommandsTab, AutoMessagesTab
@@ -414,7 +417,7 @@ class ChatToolsSettings:
             self._refresh_messages_list()
             
         except Exception as e:
-            print(f"Failed to load existing config: {e}")
+            logger.error(f"Failed to load existing config: {e}")
     
     def start_oauth_flow(self) -> None:
         """Start OAuth2 authorization flow with Twitch."""
@@ -483,16 +486,23 @@ class ChatToolsSettings:
             class OAuthCallbackHandler(BaseHTTPRequestHandler):
                 def do_GET(self):
                     # Parse the callback URL
-                    print(f"[DEBUG] Callback received: {self.path}")
                     parsed = urllib.parse.urlparse(self.path)
                     params = urllib.parse.parse_qs(parsed.query)
                     
-                    print(f"[DEBUG] Query params: {params}")
+                    # Log only the path component to avoid leaking tokens in query string
+                    logger.debug(f"Callback received: {parsed.path}")
+                    
+                    # Redact potentially sensitive query parameters (e.g., tokens) before logging
+                    redacted_params = {
+                        key: (["***REDACTED***"] if "token" in key.lower() else value)
+                        for key, value in params.items()
+                    }
+                    logger.debug(f"Query params: {redacted_params}")
                     
                     # Check if this is the token callback (from JavaScript)
                     if '/callback' in self.path and 'access_token' in params:
                         token = params['access_token'][0]
-                        print(f"[SUCCESS] Token received: {token[:20]}...")
+                        logger.info("OAuth token received.")
                         settings_instance.oauth_callback_data = {
                             'token': token,
                             'success': True
@@ -507,7 +517,7 @@ class ChatToolsSettings:
                     elif 'error' in params:
                         # Error in OAuth
                         error = params['error'][0]
-                        print(f"[ERROR] OAuth error: {error}")
+                        logger.error(f"OAuth error: {error}")
                         settings_instance.oauth_callback_data = {
                             'success': False,
                             'error': error
@@ -630,8 +640,8 @@ class ChatToolsSettings:
                 f"&scope={urllib.parse.quote(scopes)}"
             )
             
-            print(f"Opening browser for OAuth authorization...")
-            print(f"Auth URL: {auth_url}")
+            logger.info("Opening browser for OAuth authorisation...")
+            logger.debug(f"Auth URL: {auth_url}")
             
             # Open browser
             webbrowser.open(auth_url)
@@ -640,23 +650,23 @@ class ChatToolsSettings:
             self.oauth_callback_data = None
             
             # Handle two requests: initial page load + token callback
-            print("[DEBUG] Waiting for initial callback...")
+            logger.debug("Waiting for initial callback...")
             self.oauth_server.handle_request()  # Initial page load
             
             if not self.oauth_callback_data:
-                print("[DEBUG] Waiting for token callback...")
+                logger.debug("Waiting for token callback...")
                 self.oauth_server.handle_request()  # Token callback from JavaScript
             
             # Process result
             if self.oauth_callback_data and self.oauth_callback_data.get('success'):
                 token = self.oauth_callback_data['token']
-                print(f"[SUCCESS] OAuth token received")
+                logger.info("OAuth token received successfully")
                 
                 # Update UI in main thread
                 self.root.after(0, lambda: self._update_oauth_token(token))
             else:
                 error = self.oauth_callback_data.get('error', 'Unknown error') if self.oauth_callback_data else 'Timeout'
-                print(f"[ERROR] OAuth failed: {error}")
+                logger.error(f"OAuth failed: {error}")
                 
                 self.root.after(
                     0,
@@ -667,7 +677,7 @@ class ChatToolsSettings:
                 )
             
         except Exception as e:
-            print(f"[ERROR] OAuth flow error: {str(e)}")
+            logger.error(f"OAuth flow error: {str(e)}")
             import traceback
             traceback.print_exc()
             
@@ -845,7 +855,7 @@ class ChatToolsSettings:
             
             # Show result in GUI thread
             if success[0]:
-                print(f"[SUCCESS] {success[1]}")
+                logger.info(f"Connection test successful: {success[1]}")
                 self.root.after(
                     0,
                     lambda msg=success[1]: messagebox.showinfo(
@@ -854,7 +864,7 @@ class ChatToolsSettings:
                     )
                 )
             else:
-                print(f"[ERROR] {success[1]}")
+                logger.error(f"Connection test failed: {success[1]}")
                 self.root.after(
                     0,
                     lambda msg=success[1]: messagebox.showerror(
@@ -865,7 +875,7 @@ class ChatToolsSettings:
                 
         except Exception as e:
             error_msg = str(e)
-            print(f"[ERROR] Error testing connection: {error_msg}")
+            logger.error(f"Error testing connection: {error_msg}")
             import traceback
             traceback.print_exc()
             self.root.after(
@@ -949,9 +959,9 @@ def main() -> None:
         settings_gui = ChatToolsSettings()
         settings_gui.run()
     except KeyboardInterrupt:
-        print("\nSettings interrupted by user.")
+        logger.info("Settings interrupted by user")
     except Exception as e:
-        print(f"Error starting settings: {e}")
+        logger.error(f"Error starting settings: {e}")
 
 
 if __name__ == "__main__":

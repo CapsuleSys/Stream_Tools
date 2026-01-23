@@ -337,4 +337,4 @@ def load_colour_scheme(
 
 ---
 
-*Last updated: Dec 7, 2025*
+*Last updated: January 23, 2026*

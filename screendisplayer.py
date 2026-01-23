@@ -2,6 +2,7 @@ import pygame
 import sys
 import random
 import time
+from datetime import datetime  # Used in _substitute_variables for dynamic variable substitution (e.g. timestamps)
 from typing import List, Tuple, Dict, Optional, Union
 from letter_dictionary import letter_dict
 from screen_overlay import ScreenOverlay
@@ -70,11 +71,20 @@ class ScreenDisplayer:
         # Add transition system
         self.current_grid = [[False for _ in range(grid_width)] for _ in range(grid_height)]
         self.target_grid = [[False for _ in range(grid_width)] for _ in range(grid_height)]
+        self.current_outline_grid = [[False for _ in range(grid_width)] for _ in range(grid_height)]
+        self.target_outline_grid = [[False for _ in range(grid_width)] for _ in range(grid_height)]
+        self.current_outline_alpha_grid = [[0.0 for _ in range(grid_width)] for _ in range(grid_height)]  # Alpha values for outline pixels
+        self.target_outline_alpha_grid = [[0.0 for _ in range(grid_width)] for _ in range(grid_height)]
         self.transition_pixels = []  # List of (row, col) pixels that need to change
+        self.outline_transition_pixels = []  # List of (row, col) outline pixels that need to change
         self.is_transitioning = False
         self.transition_speed = 5.0  # pixels to change per frame (now supports fractional values)
         self.transition_accumulator = 0.0  # Accumulates fractional pixel changes
         self.transition_start_time = 0  # For timing logs
+        
+        # TODO: Add these outline opacity values to settings/options
+        self.outline_opacity_min = 0.35  # Minimum opacity for outline pixels (35%)
+        self.outline_opacity_max = 0.80  # Maximum opacity for outline pixels (80%)
         
         # Add overlay system
         self.overlay = ScreenOverlay(grid_width, grid_height, square_size, display_scale, self.settings)
@@ -82,11 +92,59 @@ class ScreenDisplayer:
         
         logger.info("ScreenDisplayer initialization complete")
     
+    def _generate_outline_grid(self, text_grid: List[List[bool]]) -> List[List[bool]]:
+        """Generate an outline grid from a text grid.
+        
+        For each True pixel in text_grid, mark all 8 adjacent neighbors as outline pixels,
+        but only if they're not already text pixels. Also generates random alpha values.
+        """
+        outline_grid = [[False for _ in range(self.grid_width)] for _ in range(self.grid_height)]
+        
+        # Define 8-directional neighbors (up, down, left, right, and diagonals)
+        neighbors = [
+            (-1, -1), (-1, 0), (-1, 1),  # top-left, top, top-right
+            (0, -1),           (0, 1),    # left, right
+            (1, -1),  (1, 0),  (1, 1)     # bottom-left, bottom, bottom-right
+        ]
+        
+        # For each text pixel, mark its neighbors as outline
+        for row in range(self.grid_height):
+            for col in range(self.grid_width):
+                if text_grid[row][col]:  # If this is a text pixel
+                    # Check all 8 neighbors
+                    for dy, dx in neighbors:
+                        neighbor_row = row + dy
+                        neighbor_col = col + dx
+                        
+                        # Check bounds
+                        if 0 <= neighbor_row < self.grid_height and 0 <= neighbor_col < self.grid_width:
+                            # Only mark as outline if it's NOT a text pixel
+                            if not text_grid[neighbor_row][neighbor_col]:
+                                outline_grid[neighbor_row][neighbor_col] = True
+                                # Generate random alpha for this outline pixel (ghostly effect)
+                                alpha = random.uniform(self.outline_opacity_min, self.outline_opacity_max)
+                                self.target_outline_alpha_grid[neighbor_row][neighbor_col] = alpha
+        
+        return outline_grid
+    
+    def _substitute_variables(self, text: str) -> str:
+        """Substitute variables in text like [[DATE]] with actual values"""
+        # Get current date in DD MM YYYY format
+        current_date = datetime.now().strftime("%d %m %Y")
+        
+        # Replace variables
+        text = text.replace("[[DATE]]", current_date)
+        
+        return text
+    
     def load_text_file(self, filepath: str) -> None:
         """Load text from file and save to class variable as blocks separated by empty lines"""
         try:
             with open(filepath, 'r') as file:
                 content = file.read()
+            
+            # Substitute variables before processing
+            content = self._substitute_variables(content)
             
             # Split content into blocks separated by empty lines
             blocks = []
@@ -124,19 +182,31 @@ class ScreenDisplayer:
             self.target_grid = [[False for _ in range(self.grid_width)] for _ in range(self.grid_height)]
             self._render_text_to_grid(self.text_content[block_index], self.target_grid)
             
-            # Find all pixels that need to change
+            # Generate outline grid from the text grid
+            self.target_outline_grid = self._generate_outline_grid(self.target_grid)
+            
+            # Find all text pixels that need to change
             self.transition_pixels = []
             for row in range(self.grid_height):
                 for col in range(self.grid_width):
                     if self.current_grid[row][col] != self.target_grid[row][col]:
                         self.transition_pixels.append((row, col))
             
+            # Find all outline pixels that need to change
+            self.outline_transition_pixels = []
+            for row in range(self.grid_height):
+                for col in range(self.grid_width):
+                    if self.current_outline_grid[row][col] != self.target_outline_grid[row][col]:
+                        self.outline_transition_pixels.append((row, col))
+            
             setup_time = time.time() - start_time
-            logger.debug(f"Text transition setup: {len(self.transition_pixels)} pixels to change, setup took {setup_time*1000:.1f}ms")
-            logger.debug(f"Estimated transition time: {len(self.transition_pixels) / self.transition_speed:.1f} frames at {self.transition_speed} px/frame")
+            total_pixels = len(self.transition_pixels) + len(self.outline_transition_pixels)
+            logger.debug(f"Text transition setup: {len(self.transition_pixels)} text pixels, {len(self.outline_transition_pixels)} outline pixels, setup took {setup_time*1000:.1f}ms")
+            logger.debug(f"Estimated transition time: {total_pixels / self.transition_speed:.1f} frames at {self.transition_speed} px/frame")
             
             # Randomize the order of pixel changes
             random.shuffle(self.transition_pixels)
+            random.shuffle(self.outline_transition_pixels)
             self.is_transitioning = True
             self.transition_start_time = time.time()
     
@@ -149,44 +219,74 @@ class ScreenDisplayer:
         self.target_grid = [[False for _ in range(self.grid_width)] for _ in range(self.grid_height)]
         self._render_text_to_grid("", self.target_grid)  # Render empty string
         
-        # Find pixels that need to change (only text pixels turn off, background stays)
+        # Empty text has no outline
+        self.target_outline_grid = [[False for _ in range(self.grid_width)] for _ in range(self.grid_height)]
+        
+        # Find text pixels that need to change
         self.transition_pixels = []
         for row in range(self.grid_height):
             for col in range(self.grid_width):
                 if self.current_grid[row][col] != self.target_grid[row][col]:
                     self.transition_pixels.append((row, col))
         
+        # Find outline pixels that need to change
+        self.outline_transition_pixels = []
+        for row in range(self.grid_height):
+            for col in range(self.grid_width):
+                if self.current_outline_grid[row][col] != self.target_outline_grid[row][col]:
+                    self.outline_transition_pixels.append((row, col))
+        
         setup_time = time.time() - start_time
-        logger.debug(f"Blank transition setup: {len(self.transition_pixels)} pixels to turn off, setup took {setup_time*1000:.1f}ms")
-        logger.debug(f"Estimated transition time: {len(self.transition_pixels) / self.transition_speed:.1f} frames at {self.transition_speed} px/frame")
+        total_pixels = len(self.transition_pixels) + len(self.outline_transition_pixels)
+        logger.debug(f"Blank transition setup: {len(self.transition_pixels)} text pixels, {len(self.outline_transition_pixels)} outline pixels to turn off, setup took {setup_time*1000:.1f}ms")
+        logger.debug(f"Estimated transition time: {total_pixels / self.transition_speed:.1f} frames at {self.transition_speed} px/frame")
         
         # Randomize the order of pixel changes
         random.shuffle(self.transition_pixels)
+        random.shuffle(self.outline_transition_pixels)
         self.is_transitioning = True
         self.transition_start_time = time.time()
     
     def update_transition(self) -> None:
         """Update the transition animation - call this each frame"""
-        if not self.is_transitioning or not self.transition_pixels:
+        if not self.is_transitioning or (not self.transition_pixels and not self.outline_transition_pixels):
             self.is_transitioning = False
             return
         
         # Add this frame's transition speed to the accumulator
         self.transition_accumulator += self.transition_speed
         
-        # Change whole pixels based on accumulator
-        pixels_to_change = min(int(self.transition_accumulator), len(self.transition_pixels))
+        # Calculate total pixels to change (text + outline)
+        total_remaining = len(self.transition_pixels) + len(self.outline_transition_pixels)
+        pixels_to_change = min(int(self.transition_accumulator), total_remaining)
         
         # Subtract the pixels we're actually changing from the accumulator
         self.transition_accumulator -= pixels_to_change
         
+        # Change pixels (mix text and outline pixels)
         for _ in range(pixels_to_change):
-            if self.transition_pixels:
+            # Alternate between text and outline pixels, or use whichever is available
+            if self.transition_pixels and self.outline_transition_pixels:
+                # Both available - alternate
+                if random.random() < 0.5:
+                    row, col = self.transition_pixels.pop()
+                    self.current_grid[row][col] = self.target_grid[row][col]
+                else:
+                    row, col = self.outline_transition_pixels.pop()
+                    self.current_outline_grid[row][col] = self.target_outline_grid[row][col]
+                    self.current_outline_alpha_grid[row][col] = self.target_outline_alpha_grid[row][col]
+            elif self.transition_pixels:
+                # Only text pixels remain
                 row, col = self.transition_pixels.pop()
                 self.current_grid[row][col] = self.target_grid[row][col]
+            elif self.outline_transition_pixels:
+                # Only outline pixels remain
+                row, col = self.outline_transition_pixels.pop()
+                self.current_outline_grid[row][col] = self.target_outline_grid[row][col]
+                self.current_outline_alpha_grid[row][col] = self.target_outline_alpha_grid[row][col]
         
         # Check if transition is complete
-        if not self.transition_pixels:
+        if not self.transition_pixels and not self.outline_transition_pixels:
             self.is_transitioning = False
             self.transition_accumulator = 0.0  # Reset accumulator when transition completes
             logger.debug("Transition complete")
@@ -285,6 +385,32 @@ class ScreenDisplayer:
         self.screen.fill(self.colours['black'])
         
         pixels_drawn = 0
+        
+        # First pass: Render overlay effects (ghosts behind outline)
+        if self.overlay_enabled:
+            self.overlay.update_effects(self.current_grid)
+            self.overlay.render_overlay(self.screen, self.selected_colour)
+        
+        # Second pass: Draw white outline pixels with random opacity (on top of ghosts)
+        # Pre-create a reusable surface for outline pixels to avoid per-pixel allocations
+        outline_width = int(self.square_size * self.display_scale)
+        outline_height = int(self.square_size * self.display_scale)
+        outline_surface = pygame.Surface((outline_width, outline_height))
+        outline_surface.fill(self.colours['white'])
+
+        for row in range(self.grid_height):
+            for col in range(self.grid_width):
+                if self.current_outline_grid[row][col]:
+                    x = int(col * self.square_size * self.display_scale)
+                    y = int(row * self.square_size * self.display_scale)
+
+                    # Get alpha value for this pixel and reuse the same semi-transparent surface
+                    alpha = self.current_outline_alpha_grid[row][col]
+                    outline_surface.set_alpha(int(255 * alpha))  # Convert 0.0-1.0 to 0-255
+                    self.screen.blit(outline_surface, (x, y))
+                    pixels_drawn += 1
+        
+        # Third pass: Draw text pixels (on top of outline)
         for row in range(self.grid_height):
             for col in range(self.grid_width):
                 if self.current_grid[row][col]:  # Use current_grid instead of grid
@@ -294,11 +420,6 @@ class ScreenDisplayer:
                     height = int(self.square_size * self.display_scale)
                     pygame.draw.rect(self.screen, self.selected_colour, (x, y, width, height))
                     pixels_drawn += 1
-        
-        # Render overlay effects
-        if self.overlay_enabled:
-            self.overlay.update_effects(self.current_grid)
-            self.overlay.render_overlay(self.screen, self.selected_colour)
         
         # Debug output occasionally
         if hasattr(self, '_debug_counter'):

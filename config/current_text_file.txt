@@ -1,1 +1,1 @@
-TextInputFiles\fullscreen.txt
+TextInputFiles\brb.txt
