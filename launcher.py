@@ -14,6 +14,7 @@ from tkinter import ttk, messagebox, Scrollbar, Canvas
 from pathlib import Path
 from typing import NamedTuple, Callable
 from logger_setup import setup_logger
+from obs_scene_monitor import OBSSceneMonitor
 
 logger = setup_logger(__name__)
 
@@ -36,6 +37,13 @@ class StreamToolsLauncher:
         self.root.geometry("700x400")
         self.root.resizable(True, True)
         
+        # Track launched subprocesses for cleanup
+        self.subprocesses: list = []
+        
+        # OBS monitor instance for direct connection management
+        self.obs_monitor: OBSSceneMonitor | None = None
+        self.obs_monitor_thread: threading.Thread | None = None
+        
         # Ensure config directory exists
         config_dir = Path(__file__).parent / "config"
         config_dir.mkdir(exist_ok=True)
@@ -43,6 +51,9 @@ class StreamToolsLauncher:
         # Use venv Python if available
         venv_python = Path(__file__).parent / ".venv" / "Scripts" / "python.exe"
         self.python_exe = str(venv_python) if venv_python.exists() else sys.executable
+        
+        # Register cleanup on window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Define available tools
         self.tools = [
@@ -58,6 +69,18 @@ class StreamToolsLauncher:
                 ),
                 launch_function=self.launch_text_display,
                 settings_function=self.open_screen_display_settings
+            ),
+            StreamTool(
+                name="OBS Scene Monitor",
+                description=(
+                    "Automatically switches screen display text files based on OBS Studio "
+                    "scene changes. Connects to OBS via WebSocket and monitors scene switches.\n\n"
+                    "Use this to show different text when switching to BRB scenes, starting/ending "
+                    "streams, or other scene changes. Auto-reconnects if OBS restarts.\n\n"
+                    "Requires: OBS Studio with WebSocket server enabled (Tools > WebSocket Server Settings)"
+                ),
+                launch_function=self.launch_obs_monitor,
+                settings_function=self.open_obs_monitor_settings
             ),
             StreamTool(
                 name="Chat Tools",
@@ -145,6 +168,44 @@ class StreamToolsLauncher:
         )
         help_btn.pack(side=tk.RIGHT, padx=5)
         
+        # Add OBS-specific controls if this is the OBS Scene Monitor
+        if tool.name == "OBS Scene Monitor":
+            # Status label
+            self.obs_status_label = tk.Label(
+                row_frame,
+                text="⚫ Disconnected",
+                font=("Arial", 9),
+                fg="#666"
+            )
+            self.obs_status_label.pack(side=tk.RIGHT, padx=5)
+            
+            # Disconnect button (initially disabled)
+            self.obs_disconnect_btn = tk.Button(
+                row_frame,
+                text="DISCONNECT",
+                command=self.disconnect_obs,
+                width=12,
+                height=1,
+                font=("Arial", 9),
+                bg="#f44336",
+                fg="white",
+                activebackground="#da190b",
+                state=tk.DISABLED
+            )
+            self.obs_disconnect_btn.pack(side=tk.RIGHT, padx=5)
+            
+            # Start status polling
+            self._poll_obs_status()
+        else:
+            # Add placeholder frames to align buttons with OBS row
+            # Placeholder for status label (approximate width)
+            status_spacer = tk.Frame(row_frame, width=100)
+            status_spacer.pack(side=tk.RIGHT, padx=5)
+            
+            # Placeholder for disconnect button
+            disconnect_spacer = tk.Frame(row_frame, width=100)
+            disconnect_spacer.pack(side=tk.RIGHT, padx=5)
+        
         # Launch button
         launch_btn = tk.Button(
             row_frame,
@@ -193,11 +254,12 @@ class StreamToolsLauncher:
         
         try:
             # Launch main display application
-            subprocess.Popen([
+            proc = subprocess.Popen([
                 self.python_exe,
                 str(main_app_path)
             ], cwd=str(Path(__file__).parent))
             
+            self.subprocesses.append(proc)
             logger.info("Screen Display launched successfully")
             
         except Exception as e:
@@ -223,11 +285,12 @@ class StreamToolsLauncher:
         
         try:
             # Launch settings GUI
-            subprocess.Popen([
+            proc = subprocess.Popen([
                 self.python_exe,
                 str(settings_gui_path)
             ], cwd=str(Path(__file__).parent))
             
+            self.subprocesses.append(proc)
             logger.info("Screen Display Settings launched successfully")
             
         except Exception as e:
@@ -237,6 +300,72 @@ class StreamToolsLauncher:
                 lambda: messagebox.showerror(
                     "Launch Error",
                     f"Failed to launch Settings:\n{e}"
+                )
+            )
+    
+    def launch_obs_monitor(self) -> None:
+        """Launch OBS scene monitor."""
+        if self.obs_monitor is not None and self.obs_monitor.is_running:
+            messagebox.showinfo(
+                "Already Running",
+                "OBS Scene Monitor is already running."
+            )
+            return
+            
+        thread = threading.Thread(target=self._launch_obs_monitor_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _launch_obs_monitor_thread(self) -> None:
+        """Thread worker for launching OBS monitor."""
+        try:
+            # Create monitor instance
+            self.obs_monitor = OBSSceneMonitor()
+            
+            # Store the thread reference
+            self.obs_monitor_thread = threading.current_thread()
+            
+            logger.info("OBS Scene Monitor starting...")
+            
+            # Start monitoring (this blocks until stopped)
+            self.obs_monitor.start()
+            
+        except Exception as e:
+            logger.error(f"Failed to launch OBS monitor: {e}")
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Launch Error",
+                    f"Failed to launch OBS Scene Monitor:\n{e}"
+                )
+            )
+    
+    def open_obs_monitor_settings(self) -> None:
+        """Open settings GUI for OBS monitor."""
+        thread = threading.Thread(target=self._open_obs_monitor_settings_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _open_obs_monitor_settings_thread(self) -> None:
+        """Thread worker for launching OBS settings GUI."""
+        settings_path = Path(__file__).parent / "obs_monitor_settings.py"
+        
+        try:
+            proc = subprocess.Popen([
+                self.python_exe,
+                str(settings_path)
+            ], cwd=str(Path(__file__).parent))
+            
+            self.subprocesses.append(proc)
+            logger.info("OBS Monitor Settings launched successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to launch OBS settings: {e}")
+            self.root.after(
+                0,
+                lambda: messagebox.showerror(
+                    "Launch Error",
+                    f"Failed to launch OBS Settings:\n{e}"
                 )
             )
     
@@ -253,11 +382,12 @@ class StreamToolsLauncher:
         
         try:
             # Launch chat tools application
-            subprocess.Popen([
+            proc = subprocess.Popen([
                 self.python_exe,
                 str(chat_tools_path)
             ], cwd=str(Path(__file__).parent))
             
+            self.subprocesses.append(proc)
             logger.info("Chat Tools launched successfully")
             
         except Exception as e:
@@ -283,11 +413,12 @@ class StreamToolsLauncher:
         
         try:
             # Launch chat tools settings
-            subprocess.Popen([
+            proc = subprocess.Popen([
                 self.python_exe,
                 str(settings_path)
             ], cwd=str(Path(__file__).parent))
             
+            self.subprocesses.append(proc)
             logger.info("Chat Tools Settings launched successfully")
             
         except Exception as e:
@@ -299,6 +430,66 @@ class StreamToolsLauncher:
                     f"Failed to launch Chat Tools Settings:\n{e}"
                 )
             )
+    
+    def disconnect_obs(self) -> None:
+        """Disconnect OBS scene monitor."""
+        if self.obs_monitor is not None:
+            logger.info("Disconnecting OBS Scene Monitor...")
+            self.obs_monitor.stop()
+            self.obs_monitor = None
+            self.obs_monitor_thread = None
+            logger.info("OBS Scene Monitor disconnected")
+    
+    def _poll_obs_status(self) -> None:
+        """Poll OBS connection status and update UI."""
+        if not hasattr(self, 'obs_status_label'):
+            return
+            
+        # Check connection status
+        is_connected = (
+            self.obs_monitor is not None and 
+            self.obs_monitor.event_client is not None
+        )
+        
+        # Update status label
+        if is_connected:
+            self.obs_status_label.config(
+                text="🟢 Connected",
+                fg="#4CAF50"
+            )
+            self.obs_disconnect_btn.config(state=tk.NORMAL)
+        else:
+            self.obs_status_label.config(
+                text="⚫ Disconnected",
+                fg="#666"
+            )
+            self.obs_disconnect_btn.config(state=tk.DISABLED)
+        
+        # Poll again after 1 second
+        self.root.after(1000, self._poll_obs_status)
+    
+    def on_closing(self) -> None:
+        """Handle window close event - cleanup subprocesses."""
+        logger.info("Launcher closing, terminating subprocesses...")
+        
+        # Disconnect OBS monitor if running
+        self.disconnect_obs()
+        
+        for proc in self.subprocesses:
+            if proc.poll() is None:  # Process is still running
+                try:
+                    proc.terminate()
+                    logger.info(f"Terminated subprocess PID {proc.pid}")
+                    # Wait up to 2 seconds for graceful shutdown
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    # Force kill if termination didn't work
+                    proc.kill()
+                    logger.warning(f"Force killed subprocess PID {proc.pid}")
+                except Exception as e:
+                    logger.error(f"Error terminating subprocess: {e}")
+        
+        self.root.destroy()
     
     def run(self) -> None:
         """Start the launcher GUI main loop."""

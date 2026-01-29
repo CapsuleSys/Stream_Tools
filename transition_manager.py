@@ -51,6 +51,10 @@ class TransitionManager:
         if os.path.exists(self.text_file_selection_path):
             self.last_text_selection_mtime = os.path.getmtime(self.text_file_selection_path)
         
+        # OBS order preference monitoring
+        self.obs_order_preference_path = "config/obs_order_preference.txt"
+        self.obs_order_preference = None  # None means use settings, otherwise "random" or "fixed"
+        
         # Effect transition cycling state
         self.colour_scheme_order_indices = []
         self.current_colour_scheme_position = 0
@@ -80,8 +84,16 @@ class TransitionManager:
         # Create list of all text block indices
         self.text_order_indices = list(range(len(self.displayer.text_content)))
         
+        # Check if OBS has set an order preference
+        should_shuffle = self.settings.transition.shuffle_text_order
+        
+        # Override with OBS preference if it exists
+        if self.obs_order_preference is not None:
+            should_shuffle = (self.obs_order_preference == "random")
+            logger.info(f"Using OBS order preference: {self.obs_order_preference}")
+        
         # Apply ordering based on shuffle setting
-        if self.settings.transition.shuffle_text_order:
+        if should_shuffle:
             # Only shuffle if we're turning shuffle ON (not every time settings reload)
             random.shuffle(self.text_order_indices)
             logger.info(f"Text order shuffled: {self.text_order_indices[:10]}{'...' if len(self.text_order_indices) > 10 else ''}")
@@ -388,24 +400,37 @@ class TransitionManager:
                     with open(self.text_file_selection_path, 'r', encoding='utf-8') as f:
                         new_text_file = f.read().strip()
                     
+                    # Check for OBS order preference
+                    if os.path.exists(self.obs_order_preference_path):
+                        try:
+                            with open(self.obs_order_preference_path, 'r', encoding='utf-8') as f:
+                                self.obs_order_preference = f.read().strip()
+                                logger.info(f"OBS order preference detected: {self.obs_order_preference}")
+                        except Exception as e:
+                            logger.warning(f"Error reading OBS order preference: {e}")
+                            self.obs_order_preference = None
+                    else:
+                        self.obs_order_preference = None
+                    
                     if os.path.exists(new_text_file) and new_text_file != self.text_file_path:
-                        # Update monitored text file
+                        # Update monitored text file path
                         self.text_file_path = new_text_file
                         self.last_file_mtime = os.path.getmtime(new_text_file)
                         
-                        # Load new text file
+                        # Load new text file content
                         self.displayer.load_text_file(new_text_file)
                         
-                        # Reinitialise text order with new file content
+                        # Reinitialise text order with new file content (will use OBS preference if set)
                         self._initialise_text_order()
                         
-                        # Start with first text block in the order
+                        # Set to first block in new order, but DON'T trigger transition yet
+                        # Let the next natural transition cycle pick it up
                         first_block = self.text_order_indices[0] if self.text_order_indices else 0
-                        self.current_text_block = first_block
-                        self.displayer.display_text(first_block)
+                        self.current_text_block = first_block - 1  # Will increment to first_block on next transition
                         
-                        logger.info(f"Successfully switched to text file: {new_text_file}")
+                        logger.info(f"Successfully loaded new text file: {new_text_file}")
                         logger.info(f"New file contains {len(self.displayer.text_content)} text blocks")
+                        logger.info("Next transition will display first block from new file")
                     
                     self.last_text_selection_mtime = current_text_selection_mtime
                     

@@ -1,1 +1,1 @@
-TextInputFiles\brb.txt
+TextInputFiles/webcam_background.txt

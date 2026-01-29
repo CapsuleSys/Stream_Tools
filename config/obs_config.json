@@ -1,0 +1,29 @@
+{
+  "connection": {
+    "host": "localhost",
+    "port": 4455,
+    "password": "GYcsSOK3QsNnaUQi",
+    "auto_connect": true,
+    "reconnect_max_delay": 60
+  },
+  "scene_mappings": {
+    "Capture Card Stream": {
+      "text_file": "TextInputFiles/fullscreen.txt",
+      "order_type": "random"
+    },
+    "Zelda Capture Card": {
+      "text_file": "TextInputFiles/webcam_background.txt",
+      "order_type": "random"
+    },
+    "Full Camera": {
+      "text_file": "TextInputFiles/webcam_background.txt",
+      "order_type": "random"
+    },
+    "BRB Screen": {
+      "text_file": "TextInputFiles/brb.txt",
+      "order_type": "fixed"
+    }
+  },
+  "default_text_file": "TextInputFiles/webcam_background.txt",
+  "unmapped_scene_behaviour": "keep_current"
+}

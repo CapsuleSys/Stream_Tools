@@ -75,6 +75,7 @@ class ScreenDisplayer:
         self.target_outline_grid = [[False for _ in range(grid_width)] for _ in range(grid_height)]
         self.current_outline_alpha_grid = [[0.0 for _ in range(grid_width)] for _ in range(grid_height)]  # Alpha values for outline pixels
         self.target_outline_alpha_grid = [[0.0 for _ in range(grid_width)] for _ in range(grid_height)]
+        self.outline_fade_state_grid = [[0 for _ in range(grid_width)] for _ in range(grid_height)]  # 0=inactive, 1=fading_in, -1=fading_out
         self.transition_pixels = []  # List of (row, col) pixels that need to change
         self.outline_transition_pixels = []  # List of (row, col) outline pixels that need to change
         self.is_transitioning = False
@@ -82,9 +83,16 @@ class ScreenDisplayer:
         self.transition_accumulator = 0.0  # Accumulates fractional pixel changes
         self.transition_start_time = 0  # For timing logs
         
+        # Map text pixels to their outline neighbors for instant outline appearance
+        self.text_to_outline_map: dict[tuple[int, int], list[tuple[int, int]]] = {}
+        # Reverse map: outline pixels to all their adjacent text pixels
+        self.outline_to_text_map: dict[tuple[int, int], set[tuple[int, int]]] = {}
+        self.text_pending_deletion: set[tuple[int, int]] = set()  # Text pixels waiting for outline to fade
+        
         # TODO: Add these outline opacity values to settings/options
-        self.outline_opacity_min = 0.35  # Minimum opacity for outline pixels (35%)
-        self.outline_opacity_max = 0.80  # Maximum opacity for outline pixels (80%)
+        self.outline_opacity_min = 0.1  # Minimum opacity for outline pixels (10%)
+        self.outline_opacity_max = 0.35  # Maximum opacity for outline pixels (35%)
+        self.outline_opacity_lerp_speed = 0.2  # How fast outline opacity changes (0.0-1.0 per frame)
         
         # Add overlay system
         self.overlay = ScreenOverlay(grid_width, grid_height, square_size, display_scale, self.settings)
@@ -126,6 +134,49 @@ class ScreenDisplayer:
                                 self.target_outline_alpha_grid[neighbor_row][neighbor_col] = alpha
         
         return outline_grid
+    
+    def _build_text_to_outline_map(self) -> None:
+        """Build a mapping from each text pixel to its outline neighbors.
+        Also builds reverse map from outline to all adjacent text pixels.
+        
+        This allows outline pixels to appear instantly when their core text
+        pixel appears during transitions.
+        """
+        self.text_to_outline_map = {}
+        self.outline_to_text_map = {}
+        
+        # Define 8-directional neighbors
+        neighbors = [
+            (-1, -1), (-1, 0), (-1, 1),
+            (0, -1),           (0, 1),
+            (1, -1),  (1, 0),  (1, 1)
+        ]
+        
+        # For each text pixel, find its outline neighbors
+        for row in range(self.grid_height):
+            for col in range(self.grid_width):
+                if self.target_grid[row][col]:  # If this is a text pixel
+                    outline_neighbors = []
+                    
+                    # Check all 8 neighbors
+                    for dy, dx in neighbors:
+                        neighbor_row = row + dy
+                        neighbor_col = col + dx
+                        
+                        # Check bounds
+                        if 0 <= neighbor_row < self.grid_height and 0 <= neighbor_col < self.grid_width:
+                            # If neighbor is an outline pixel (not text)
+                            if self.target_outline_grid[neighbor_row][neighbor_col] and not self.target_grid[neighbor_row][neighbor_col]:
+                                outline_neighbors.append((neighbor_row, neighbor_col))
+                                
+                                # Build reverse map: this outline touches this text
+                                outline_key = (neighbor_row, neighbor_col)
+                                if outline_key not in self.outline_to_text_map:
+                                    self.outline_to_text_map[outline_key] = set()
+                                self.outline_to_text_map[outline_key].add((row, col))
+                    
+                    if outline_neighbors:
+                        self.text_to_outline_map[(row, col)] = outline_neighbors
     
     def _substitute_variables(self, text: str) -> str:
         """Substitute variables in text like [[DATE]] with actual values"""
@@ -185,6 +236,9 @@ class ScreenDisplayer:
             # Generate outline grid from the text grid
             self.target_outline_grid = self._generate_outline_grid(self.target_grid)
             
+            # Build map of text pixels to their outline neighbors
+            self._build_text_to_outline_map()
+            
             # Find all text pixels that need to change
             self.transition_pixels = []
             for row in range(self.grid_height):
@@ -221,6 +275,15 @@ class ScreenDisplayer:
         
         # Empty text has no outline
         self.target_outline_grid = [[False for _ in range(self.grid_width)] for _ in range(self.grid_height)]
+        
+        # Build map of current text pixels to their outline neighbors (for fade-out)
+        # Save current grid state before it changes
+        old_target_grid = [[self.current_grid[row][col] for col in range(self.grid_width)] for row in range(self.grid_height)]
+        # Temporarily set target to current for mapping
+        temp_target = self.target_grid
+        self.target_grid = old_target_grid
+        self._build_text_to_outline_map()
+        self.target_grid = temp_target  # Restore actual blank target
         
         # Find text pixels that need to change
         self.transition_pixels = []
@@ -263,27 +326,96 @@ class ScreenDisplayer:
         # Subtract the pixels we're actually changing from the accumulator
         self.transition_accumulator -= pixels_to_change
         
-        # Change pixels (mix text and outline pixels)
+        # Change pixels (text pixels trigger their outline neighbors)
         for _ in range(pixels_to_change):
-            # Alternate between text and outline pixels, or use whichever is available
-            if self.transition_pixels and self.outline_transition_pixels:
-                # Both available - alternate
-                if random.random() < 0.5:
-                    row, col = self.transition_pixels.pop()
-                    self.current_grid[row][col] = self.target_grid[row][col]
-                else:
-                    row, col = self.outline_transition_pixels.pop()
-                    self.current_outline_grid[row][col] = self.target_outline_grid[row][col]
-                    self.current_outline_alpha_grid[row][col] = self.target_outline_alpha_grid[row][col]
-            elif self.transition_pixels:
-                # Only text pixels remain
+            if self.transition_pixels:
+                # Pop a text pixel and update it
                 row, col = self.transition_pixels.pop()
-                self.current_grid[row][col] = self.target_grid[row][col]
+                old_value = self.current_grid[row][col]
+                new_value = self.target_grid[row][col]
+                self.current_grid[row][col] = new_value
+                
+                # Handle outline neighbors based on whether text is appearing or disappearing
+                if (row, col) in self.text_to_outline_map:
+                    for outline_row, outline_col in self.text_to_outline_map[(row, col)]:
+                        if new_value and not old_value:
+                            # Text pixel appearing - add outline at full opacity instantly
+                            self.current_outline_grid[outline_row][outline_col] = True
+                            self.current_outline_alpha_grid[outline_row][outline_col] = self.target_outline_alpha_grid[outline_row][outline_col]
+                        elif not new_value and old_value:
+                            # Text pixel disappearing - check if outline still has ANY text neighbor IN TARGET
+                            has_text_neighbor = False
+                            
+                            # Check all 8 neighbors of this outline pixel
+                            for dy in [-1, 0, 1]:
+                                for dx in [-1, 0, 1]:
+                                    if dy == 0 and dx == 0:
+                                        continue
+                                    
+                                    check_row = outline_row + dy
+                                    check_col = outline_col + dx
+                                    
+                                    # Check bounds
+                                    if 0 <= check_row < self.grid_height and 0 <= check_col < self.grid_width:
+                                        # Check target grid - if text exists in final state, it's staying
+                                        if self.target_grid[check_row][check_col]:
+                                            has_text_neighbor = True
+                                            break
+                                
+                                if has_text_neighbor:
+                                    break
+                            
+                            # Remove outline instantly if it has NO text neighbors left
+                            if not has_text_neighbor:
+                                self.current_outline_grid[outline_row][outline_col] = False
+                                self.current_outline_alpha_grid[outline_row][outline_col] = 0.0
+                        
+                        # Remove from outline transition list if present
+                        if (outline_row, outline_col) in self.outline_transition_pixels:
+                            self.outline_transition_pixels.remove((outline_row, outline_col))
             elif self.outline_transition_pixels:
-                # Only outline pixels remain
+                # Only orphaned outline pixels remain (outlines without text cores)
                 row, col = self.outline_transition_pixels.pop()
-                self.current_outline_grid[row][col] = self.target_outline_grid[row][col]
-                self.current_outline_alpha_grid[row][col] = self.target_outline_alpha_grid[row][col]
+                old_value = self.current_outline_grid[row][col]
+                new_value = self.target_outline_grid[row][col]
+                self.current_outline_grid[row][col] = new_value
+                
+                # Handle fade based on appearing or disappearing
+                if new_value and not old_value:
+                    # Appearing - start at 0 and fade in
+                    self.current_outline_alpha_grid[row][col] = 0.0
+                    self.outline_fade_state_grid[row][col] = 1
+                elif not new_value and old_value:
+                    # Disappearing - start fade out
+                    self.outline_fade_state_grid[row][col] = -1
+        
+        # CLEANUP PASS: Remove ALL outline pixels that have no text neighbors in current grid
+        for row in range(self.grid_height):
+            for col in range(self.grid_width):
+                if self.current_outline_grid[row][col]:
+                    # This outline pixel exists - check if it has any text neighbors currently visible
+                    has_text_neighbor = False
+                    
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            if dy == 0 and dx == 0:
+                                continue
+                            
+                            check_row = row + dy
+                            check_col = col + dx
+                            
+                            if 0 <= check_row < self.grid_height and 0 <= check_col < self.grid_width:
+                                if self.current_grid[check_row][check_col]:
+                                    has_text_neighbor = True
+                                    break
+                        
+                        if has_text_neighbor:
+                            break
+                    
+                    # Remove outline if it has no text neighbors
+                    if not has_text_neighbor:
+                        self.current_outline_grid[row][col] = False
+                        self.current_outline_alpha_grid[row][col] = 0.0
         
         # Check if transition is complete
         if not self.transition_pixels and not self.outline_transition_pixels:
@@ -391,20 +523,21 @@ class ScreenDisplayer:
             self.overlay.update_effects(self.current_grid)
             self.overlay.render_overlay(self.screen, self.selected_colour)
         
-        # Second pass: Draw white outline pixels with random opacity (on top of ghosts)
+        # Second pass: Draw white outline pixels with lerped opacity (on top of ghosts)
         # Pre-create a reusable surface for outline pixels to avoid per-pixel allocations
         outline_width = int(self.square_size * self.display_scale)
         outline_height = int(self.square_size * self.display_scale)
         outline_surface = pygame.Surface((outline_width, outline_height))
         outline_surface.fill(self.colours['white'])
 
+        # Draw outline pixels
         for row in range(self.grid_height):
             for col in range(self.grid_width):
-                if self.current_outline_grid[row][col]:
+                if self.current_outline_alpha_grid[row][col] > 0.001:
                     x = int(col * self.square_size * self.display_scale)
                     y = int(row * self.square_size * self.display_scale)
-
-                    # Get alpha value for this pixel and reuse the same semi-transparent surface
+                    
+                    # Get alpha value for this pixel
                     alpha = self.current_outline_alpha_grid[row][col]
                     outline_surface.set_alpha(int(255 * alpha))  # Convert 0.0-1.0 to 0-255
                     self.screen.blit(outline_surface, (x, y))
