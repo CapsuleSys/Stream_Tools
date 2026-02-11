@@ -19,6 +19,7 @@ ENV/
 
 # Config files with sensitive data
 config/chat_tools_config.json
+config/obs_config.json
 
 # User settings
 config/user_settings.json

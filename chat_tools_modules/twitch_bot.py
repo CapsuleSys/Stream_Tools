@@ -52,6 +52,7 @@ class TwitchChatBot(commands.Bot):
             activity_tracker: Optional deque to track chat activity timestamps
         """
         super().__init__(
+            token=config['oauth_token'],
             client_id=config['client_id'],
             client_secret=config['client_secret'],
             bot_id=config['bot_id'],
@@ -61,6 +62,7 @@ class TwitchChatBot(commands.Bot):
         self.config = config
         self.oauth_token = config['oauth_token']
         self.broadcaster_id: Optional[str] = None
+        self._setup_successful = False
         
         # Callbacks
         self.on_ready_callback = on_ready_callback
@@ -153,21 +155,31 @@ class TwitchChatBot(commands.Bot):
                     payload=payload,
                     as_bot=True
                 )
-                logger.debug(f"Successfully subscribed to chat messages")
+                logger.info(f"Successfully subscribed to chat messages via EventSub")
+                self._setup_successful = True
                 
                 # TODO: Add additional EventSub subscriptions when dual OAuth implemented
                 
             else:
-                logger.error(f"Could not find channel: {channel_name}")
+                error_msg = f"Could not find channel: {channel_name}"
+                logger.error(error_msg)
+                self.on_error_callback(error_msg)
         except Exception as e:
-            logger.error(f"Failed to subscribe to chat: {e}")
+            error_msg = f"Failed to subscribe to chat: {e}"
+            logger.error(error_msg)
+            self.on_error_callback(error_msg)
             import traceback
             traceback.print_exc()
     
     async def event_ready(self):
         """Called when bot is ready and connected."""
         logger.info(f"Bot ready event triggered for channel #{self.config['channel']}")
-        self.on_ready_callback()
+        
+        # Only call success callback if setup completed successfully
+        if self._setup_successful:
+            self.on_ready_callback()
+        else:
+            logger.warning("Bot ready event triggered but setup was not successful")
     
     async def event_message(self, message: ChatMessage):
         """Handle incoming chat messages from EventSub.

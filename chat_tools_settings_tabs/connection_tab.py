@@ -120,6 +120,15 @@ class ConnectionTab:
             padx=10
         )
         
+        # Redirect URI help text
+        redirect_help = tk.Label(
+            form_frame,
+            text="⚠ Add redirect URI: http://localhost:8080",
+            font=("Arial", 8),
+            fg="red"
+        )
+        redirect_help.grid(row=4, column=1, sticky="w", padx=10, pady=(0, 5))
+        
         # OAuth authorize button
         oauth_btn = tk.Button(
             form_frame,
@@ -130,14 +139,14 @@ class ConnectionTab:
             fg="white",
             width=28
         )
-        oauth_btn.grid(row=4, column=1, pady=15, padx=10)
+        oauth_btn.grid(row=5, column=1, pady=15, padx=10)
         
         # OAuth token field (read-only, populated by OAuth)
         tk.Label(
             form_frame,
             text="OAuth Token:",
             font=("Arial", 11)
-        ).grid(row=5, column=0, sticky="w", pady=10)
+        ).grid(row=6, column=0, sticky="w", pady=10)
         
         self.oauth_entry = tk.Entry(
             form_frame,
@@ -146,7 +155,7 @@ class ConnectionTab:
             show="*",
             state="readonly"
         )
-        self.oauth_entry.grid(row=5, column=1, pady=10, padx=10)
+        self.oauth_entry.grid(row=6, column=1, pady=10, padx=10)
         
         # Help text for OAuth
         oauth_help = tk.Label(
@@ -155,24 +164,24 @@ class ConnectionTab:
             font=("Arial", 8),
             fg="grey"
         )
-        oauth_help.grid(row=6, column=1, sticky="w", padx=10)
+        oauth_help.grid(row=7, column=1, sticky="w", padx=10)
         
         # Bot ID field
         tk.Label(
             form_frame,
             text="Bot ID:",
             font=("Arial", 11)
-        ).grid(row=7, column=0, sticky="w", pady=10)
+        ).grid(row=8, column=0, sticky="w", pady=10)
         
         self.bot_id_entry = tk.Entry(form_frame, width=30, font=("Arial", 11))
-        self.bot_id_entry.grid(row=7, column=1, pady=10, padx=10)
+        self.bot_id_entry.grid(row=8, column=1, pady=10, padx=10)
         
         # Bot ID help text (clickable link)
         create_link_label(
             form_frame,
             "Get Bot ID: streamweasels.com/tools/convert-twitch-username-to-user-id",
             "https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/",
-            row=8,
+            row=9,
             column=1,
             sticky="w",
             padx=10,
@@ -184,10 +193,10 @@ class ConnectionTab:
             form_frame,
             text="Channel to Join:",
             font=("Arial", 11)
-        ).grid(row=9, column=0, sticky="w", pady=10)
+        ).grid(row=10, column=0, sticky="w", pady=10)
         
         self.channel_entry = tk.Entry(form_frame, width=30, font=("Arial", 11))
-        self.channel_entry.grid(row=9, column=1, pady=10, padx=10)
+        self.channel_entry.grid(row=10, column=1, pady=10, padx=10)
         
         # Channel help text
         channel_help = tk.Label(
@@ -196,7 +205,7 @@ class ConnectionTab:
             font=("Arial", 8),
             fg="grey"
         )
-        channel_help.grid(row=10, column=1, sticky="w", padx=10)
+        channel_help.grid(row=11, column=1, sticky="w", padx=10)
         
         # Tab-specific buttons
         tab_button_frame = tk.Frame(self.frame, pady=15)

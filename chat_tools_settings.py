@@ -16,6 +16,7 @@ import webbrowser
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from logger_setup import setup_logger
+from chat_tools_modules.token_manager import TokenManager
 
 logger = setup_logger(__name__)
 
@@ -420,261 +421,94 @@ class ChatToolsSettings:
             logger.error(f"Failed to load existing config: {e}")
     
     def start_oauth_flow(self) -> None:
-        """Start OAuth2 authorization flow with Twitch."""
+        """Start OAuth2 authorization flow with Twitch to get access and refresh tokens."""
         client_id = self.connection_tab.client_id_entry.get().strip()
+        client_secret = self.connection_tab.client_secret_entry.get().strip()
         
-        if not client_id:
+        if not client_id or not client_secret:
             messagebox.showerror(
-                "Missing Client ID",
-                "Please enter your Client ID before authorizing.\n\n"
-                "Get it from: https://dev.twitch.tv/console/apps"
+                "Missing Credentials",
+                "Please enter both Client ID and Client Secret before authorizing.\n\n"
+                "Get them from: https://dev.twitch.tv/console/apps"
             )
             return
         
         # Start OAuth flow in separate thread
-        thread = threading.Thread(target=self._oauth_flow_thread, args=(client_id,))
+        thread = threading.Thread(
+            target=self._oauth_flow_thread, 
+            args=(client_id, client_secret)
+        )
         thread.daemon = True
         thread.start()
     
-    def _oauth_flow_thread(self, client_id: str) -> None:
-        """Thread worker for Twitch OAuth flow.
+    def _oauth_flow_thread(self, client_id: str, client_secret: str) -> None:
+        """Thread worker for Twitch OAuth flow using authorization code grant.
         
-        Implements Twitch's implicit grant OAuth flow using a local HTTP server
-        to capture the access token. This is a complex two-step process required
-        because Twitch returns the token in the URL fragment (after #), which
-        browsers don't send to servers.
+        Uses TokenManager to perform OAuth authorization code flow which provides
+        both access tokens and refresh tokens. Refresh tokens allow automatic
+        token renewal without user re-authentication.
         
         OAuth Flow Process:
-        1. Opens browser to Twitch OAuth URL with client_id and redirect_uri
-        2. User authorises the application on Twitch
-        3. Twitch redirects to http://localhost:8080 with token in URL fragment
-        4. Local HTTP server serves HTML page with JavaScript
-        5. JavaScript extracts token from window.location.hash
-        6. JavaScript makes fetch() call to /callback with token as query param
-        7. Server captures token from query string and stores it
-        8. Token is updated in GUI via root.after() for thread safety
-        
-        Why Two HTTP Requests Are Needed:
-        - First request (/) serves the HTML/JavaScript extraction page
-        - Second request (/callback) receives the extracted token
-        - This workaround is necessary because URL fragments are client-side only
-        
-        Server Configuration:
-        - Listens on localhost:8080
-        - Timeout: None (blocks until token received)
-        - Handles exactly 2 requests then shuts down
-        
-        Current Limitations (TODO):
-        - Single OAuth token (bot account only)
-        - Missing broadcaster OAuth for advanced features
-        - No token refresh mechanism
-        - No token expiration handling
-        - See lines 1125-1147 for dual OAuth implementation plan
+        1. Opens browser to Twitch OAuth URL
+        2. User authorizes the application
+        3. Twitch redirects to localhost with authorization code
+        4. TokenManager exchanges code for access + refresh tokens
+        5. Both tokens are saved to config
         
         Thread Safety:
-        - Uses class instance variable to pass token between handler and thread
         - GUI updates via root.after() to avoid tkinter threading issues
-        
-        Error Handling:
-        - Catches all exceptions and displays error dialog
-        - Prints debug output to console for troubleshooting
         """
         try:
-            # Create OAuth callback handler
-            settings_instance = self
-            
-            class OAuthCallbackHandler(BaseHTTPRequestHandler):
-                def do_GET(self):
-                    # Parse the callback URL
-                    parsed = urllib.parse.urlparse(self.path)
-                    params = urllib.parse.parse_qs(parsed.query)
-                    
-                    # Log only the path component to avoid leaking tokens in query string
-                    logger.debug(f"Callback received: {parsed.path}")
-                    
-                    # Redact potentially sensitive query parameters (e.g., tokens) before logging
-                    redacted_params = {
-                        key: (["***REDACTED***"] if "token" in key.lower() else value)
-                        for key, value in params.items()
-                    }
-                    logger.debug(f"Query params: {redacted_params}")
-                    
-                    # Check if this is the token callback (from JavaScript)
-                    if '/callback' in self.path and 'access_token' in params:
-                        token = params['access_token'][0]
-                        logger.info("OAuth token received.")
-                        settings_instance.oauth_callback_data = {
-                            'token': token,
-                            'success': True
-                        }
-                        
-                        # Send minimal response
-                        self.send_response(200)
-                        self.send_header('Content-type', 'text/plain')
-                        self.end_headers()
-                        self.wfile.write(b'OK')
-                        
-                    elif 'error' in params:
-                        # Error in OAuth
-                        error = params['error'][0]
-                        logger.error(f"OAuth error: {error}")
-                        settings_instance.oauth_callback_data = {
-                            'success': False,
-                            'error': error
-                        }
-                        
-                        # Send error page
-                        self.send_response(200)
-                        self.send_header('Content-type', 'text/html')
-                        self.end_headers()
-                        self.wfile.write(f'''
-                            <html><body style="font-family: Arial; text-align: center; padding: 50px;">
-                                <h1 style="color: red;">Authorization Failed</h1>
-                                <p>Error: {error}</p>
-                                <p>Please close this window and try again.</p>
-                            </body></html>
-                        '''.encode())
-                        
-                    else:
-                        # Initial redirect from Twitch - extract fragment with JavaScript
-                        self.send_response(200)
-                        self.send_header('Content-type', 'text/html')
-                        self.end_headers()
-                        self.wfile.write(b'''
-                            <html>
-                            <head><title>Twitch Authorization</title></head>
-                            <body style="font-family: Arial; text-align: center; padding: 50px;">
-                                <h1 style="color: #9146FF;">Processing Authorization...</h1>
-                                <p>Please wait...</p>
-                                <script>
-                                    // Extract token from URL fragment
-                                    const hash = window.location.hash.substring(1);
-                                    const params = new URLSearchParams(hash);
-                                    const token = params.get('access_token');
-                                    const error = params.get('error');
-                                    
-                                    if (token) {
-                                        // Send token to server via query string
-                                        fetch('/callback?access_token=' + encodeURIComponent(token))
-                                            .then(() => {
-                                                document.body.innerHTML = `
-                                                    <h1 style="color: #9146FF;">Authorization Successful!</h1>
-                                                    <p>You can close this window and return to the application.</p>
-                                                `;
-                                            })
-                                            .catch(err => {
-                                                document.body.innerHTML = `
-                                                    <h1 style="color: red;">Error</h1>
-                                                    <p>Failed to send token. Please try again.</p>
-                                                `;
-                                            });
-                                    } else if (error) {
-                                        document.body.innerHTML = `
-                                            <h1 style="color: red;">Authorization Failed</h1>
-                                            <p>Error: ${error}</p>
-                                            <p>Please close this window and try again.</p>
-                                        `;
-                                    } else {
-                                        document.body.innerHTML = `
-                                            <h1 style="color: orange;">No Token Received</h1>
-                                            <p>No authorization data found. Please try again.</p>
-                                        `;
-                                    }
-                                </script>
-                            </body>
-                            </html>
-                        ''')
-                
-                def log_message(self, format, *args):
-                    # Suppress server logs
-                    pass
-            
-            # Start local server
-            port = 8080
-            self.oauth_server = HTTPServer(('localhost', port), OAuthCallbackHandler)
-            
-            # Build OAuth URL
-            redirect_uri = f"http://localhost:{port}"
-            # TODO: Implement dual OAuth flow for bot account and streamer account
-            # TODO: Current flow only authenticates bot account, which limits access to streamer's channel data
-            # TODO: Bot account needs these scopes for basic functionality:
-            # TODO:   - user:read:chat (read messages via EventSub)
-            # TODO:   - user:write:chat (send messages to chat)
-            # TODO:   - moderator:read:followers (read followers as moderator)
-            # TODO: Streamer account needs these scopes for full channel data access:
-            # TODO:   - channel:read:subscriptions (read subscriber list and events)
-            # TODO:   - channel:read:predictions (read prediction events)
-            # TODO:   - channel:read:polls (read poll events)
-            # TODO:   - channel:read:hype_train (read hype train events)
-            # TODO:   - channel:read:redemptions (read channel point redemptions)
-            # TODO:   - bits:read (read bits/cheer events)
-            # TODO: Implementation plan for dual OAuth:
-            # TODO:   1. Add separate "Authenticate Bot" and "Authenticate Streamer" buttons in settings
-            # TODO:   2. Store both tokens in config (bot_oauth_token, streamer_oauth_token)
-            # TODO:   3. Use bot token for chat operations (read/write messages)
-            # TODO:   4. Use streamer token for channel data queries (subs, predictions, polls, etc.)
-            # TODO:   5. Add validation to ensure both tokens are present before connecting
-            # TODO:   6. Handle token refresh separately for both accounts
-            # TODO:   7. Display which account is authenticated in settings UI
-            # TODO: For now, using single bot account OAuth with moderator permissions
-            # TODO: Bot must be moderator in streamer's channel for moderator:read:followers to work
-            
-            # Comprehensive scopes for chat, stream info, and events
-            scopes = (
-                "user:read:chat "
-                "user:write:chat "
-                "channel:read:subscriptions "
-                "moderator:read:followers "
-                "channel:read:predictions "
-                "channel:read:polls "
-                "channel:read:hype_train "
-                "channel:read:redemptions "
-                "bits:read"
+            # Create token manager
+            token_manager = TokenManager(
+                client_id=client_id,
+                client_secret=client_secret,
+                config_path=self.config_path
             )
             
-            auth_url = (
-                f"https://id.twitch.tv/oauth2/authorize"
-                f"?client_id={client_id}"
-                f"&redirect_uri={urllib.parse.quote(redirect_uri)}"
-                f"&response_type=token"
-                f"&scope={urllib.parse.quote(scopes)}"
-            )
+            # Create event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            logger.info("Opening browser for OAuth authorisation...")
-            logger.debug(f"Auth URL: {auth_url}")
+            logger.info("Starting OAuth authorization flow...")
             
-            # Open browser
-            webbrowser.open(auth_url)
+            # Perform OAuth flow
+            result = loop.run_until_complete(token_manager.do_full_oauth_flow())
             
-            # Wait for callback (with timeout)
-            self.oauth_callback_data = None
-            
-            # Handle two requests: initial page load + token callback
-            logger.debug("Waiting for initial callback...")
-            self.oauth_server.handle_request()  # Initial page load
-            
-            if not self.oauth_callback_data:
-                logger.debug("Waiting for token callback...")
-                self.oauth_server.handle_request()  # Token callback from JavaScript
-            
-            # Process result
-            if self.oauth_callback_data and self.oauth_callback_data.get('success'):
-                token = self.oauth_callback_data['token']
-                logger.info("OAuth token received successfully")
+            if result:
+                access_token, refresh_token = result
+                logger.info("OAuth flow completed successfully")
                 
                 # Update UI in main thread
-                self.root.after(0, lambda: self._update_oauth_token(token))
+                self.root.after(
+                    0, 
+                    lambda: self._update_oauth_tokens(access_token, refresh_token)
+                )
+                self.root.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Authorization Successful",
+                        "Successfully authenticated with Twitch!\n\n"
+                        "Your tokens have been saved and will auto-refresh when needed."
+                    )
+                )
             else:
-                error = self.oauth_callback_data.get('error', 'Unknown error') if self.oauth_callback_data else 'Timeout'
-                logger.error(f"OAuth failed: {error}")
-                
+                logger.error("OAuth flow failed")
                 self.root.after(
                     0,
                     lambda: messagebox.showerror(
                         "Authorization Failed",
-                        f"OAuth authorization failed: {error}"
+                        "Failed to complete OAuth authorization.\n\n"
+                        "Common causes:\n"
+                        "• Redirect URI mismatch: Add 'http://localhost:8080' to your Twitch app\n"
+                        "  at https://dev.twitch.tv/console/apps\n"
+                        "• Invalid Client ID or Secret\n"
+                        "• Authorization was cancelled\n\n"
+                        "Check the console logs for specific error details."
                     )
                 )
+            
+            loop.close()
             
         except Exception as e:
             logger.error(f"OAuth flow error: {str(e)}")
@@ -688,24 +522,42 @@ class ChatToolsSettings:
                     f"Error during OAuth flow:\n{msg}"
                 )
             )
-        finally:
-            if self.oauth_server:
-                self.oauth_server.server_close()
     
-    def _update_oauth_token(self, token: str) -> None:
-        """Update OAuth token field in UI."""
+    def _update_oauth_tokens(self, access_token: str, refresh_token: str) -> None:
+        """Update OAuth tokens in UI and config.
+        
+        Args:
+            access_token: The OAuth access token
+            refresh_token: The OAuth refresh token
+        """
+        # Update UI
         self.connection_tab.oauth_entry.config(state="normal")
         self.connection_tab.oauth_entry.delete(0, tk.END)
-        self.connection_tab.oauth_entry.insert(0, token)
+        self.connection_tab.oauth_entry.insert(0, access_token)
         self.connection_tab.oauth_entry.config(state="readonly")
         
-        messagebox.showinfo(
-            "Authorization Successful",
-            "OAuth token received successfully!\n\n"
-            "Next: Enter your Bot ID below.\n"
-            "Get it from: https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/\n\n"
-            "Then test the connection or save settings."
-        )
+        # Save refresh token to config immediately
+        try:
+            if self.config_path.exists():
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                config['oauth_token'] = access_token
+                config['refresh_token'] = refresh_token
+                
+                with open(self.config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2)
+                
+                logger.info("Saved OAuth tokens (including refresh token) to config")
+            else:
+                logger.warning(f"Config file not found at {self.config_path}")
+        except Exception as e:
+            logger.error(f"Failed to save refresh token to config: {e}")
+            messagebox.showwarning(
+                "Token Save Warning",
+                f"Access token updated in UI but failed to save refresh token:\n{e}\n\n"
+                "You may need to re-authorize next time."
+            )
     
     def test_connection(self) -> None:
         """Test connection to Twitch with provided credentials."""

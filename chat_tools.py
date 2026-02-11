@@ -18,6 +18,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from logger_setup import setup_logger
 from chat_tools_modules import TwitchChatBot, CommandHandler, AutoMessageHandler
+from chat_tools_modules.token_manager import TokenManager
 
 logger = setup_logger(__name__)
 
@@ -225,12 +226,94 @@ class ChatTools:
             self.open_settings()
             return
         
-        self.log_message("Attempting to connect to Twitch...", "INFO")
+        self.log_message("Checking OAuth token...", "INFO")
         
-        # Start bot in separate thread
-        self.bot_thread = threading.Thread(target=self._run_bot_thread)
-        self.bot_thread.daemon = True
-        self.bot_thread.start()
+        # Check and refresh token if needed
+        threading.Thread(target=self._check_and_connect, daemon=True).start()
+    
+    def _check_and_connect(self) -> None:
+        """Check token validity and refresh if needed before connecting."""
+        try:
+            # Create token manager
+            token_manager = TokenManager(
+                client_id=self.config['client_id'],
+                client_secret=self.config['client_secret'],
+                config_path=self.config_path
+            )
+            
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Check token validity
+            refresh_token = self.config.get('refresh_token')
+            result = loop.run_until_complete(
+                token_manager.ensure_valid_token(
+                    self.config['oauth_token'],
+                    refresh_token
+                )
+            )
+            
+            if result:
+                access_token, new_refresh = result
+                # Update config with new tokens
+                self.config['oauth_token'] = access_token
+                if new_refresh:
+                    self.config['refresh_token'] = new_refresh
+                
+                # Save updated tokens to config file
+                try:
+                    with open(self.config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+                    
+                    config_data['oauth_token'] = access_token
+                    if new_refresh:
+                        config_data['refresh_token'] = new_refresh
+                    
+                    with open(self.config_path, 'w', encoding='utf-8') as f:
+                        json.dump(config_data, f, indent=2)
+                    
+                    logger.info("Saved refreshed tokens to config file")
+                except Exception as e:
+                    logger.error(f"Failed to save refreshed tokens: {e}")
+                
+                self.root.after(0, lambda: self.log_message("Token validated", "SUCCESS"))
+                self.root.after(0, lambda: self.log_message("Connecting to Twitch...", "INFO"))
+                
+                # Start bot in separate thread
+                self.bot_thread = threading.Thread(target=self._run_bot_thread)
+                self.bot_thread.daemon = True
+                self.bot_thread.start()
+            else:
+                # Token refresh failed - need new authorization
+                self.root.after(
+                    0,
+                    lambda: self.log_message(
+                        "Token expired and could not be refreshed. Please re-authenticate.",
+                        "ERROR"
+                    )
+                )
+                self.root.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        "Authentication Required",
+                        "Your OAuth token has expired and could not be refreshed.\n\n"
+                        "Please open Chat Tools Settings and click 'Authenticate with Twitch' "
+                        "to get a new token."
+                    )
+                )
+                
+            loop.close()
+            
+        except Exception as e:
+            logger.error(f"Token check failed: {e}")
+            self.root.after(
+                0,
+                lambda err=str(e): self.log_message(
+                    f"Token check failed: {err}",
+                    "ERROR"
+                )
+            )
     
     def _run_bot_thread(self) -> None:
         """Thread worker for running Twitch bot.

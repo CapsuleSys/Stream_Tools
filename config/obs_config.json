@@ -12,7 +12,7 @@
       "order_type": "random"
     },
     "Zelda Capture Card": {
-      "text_file": "TextInputFiles/webcam_background.txt",
+      "text_file": "TextInputFiles/fullscreen.txt",
       "order_type": "random"
     },
     "Full Camera": {
@@ -20,8 +20,12 @@
       "order_type": "random"
     },
     "BRB Screen": {
-      "text_file": "TextInputFiles/brb.txt",
+      "text_file": "TextInputFiles/brb copy.txt",
       "order_type": "fixed"
+    },
+    "GBA Capture Card": {
+      "text_file": "TextInputFiles/fullscreen.txt",
+      "order_type": "random"
     }
   },
   "default_text_file": "TextInputFiles/webcam_background.txt",
